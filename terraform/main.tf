@@ -38,7 +38,7 @@ resource "aws_instance" "pipeline" {
     db_username  = aws_db_instance.pipeline_db.username
     db_password  = var.db_password
     db_address   = aws_db_instance.pipeline_db.address
-    ssh_key      = file("~/.ssh/${var.ssh_key_name}.pub")  
+    ssh_key      = file("/home/hoss/.ssh/${var.ssh_key_name}.pub") 
   })
   
   vpc_security_group_ids = [aws_security_group.pipeline_sg.id]
