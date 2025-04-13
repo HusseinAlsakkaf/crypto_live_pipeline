@@ -1,12 +1,7 @@
 #!/bin/bash
 # AWS EC2 User Data Script for Crypto Live Pipeline
 set -euo pipefail
-
-# ======================
-# 0. Logging Setup (NEW - Added first to capture all output)
-# ======================
 exec > >(tee /var/log/user-data.log) 2>&1
-echo "=== Starting user-data script ==="
 
 # ======================
 # 1. System Configuration
@@ -15,23 +10,22 @@ echo ">>> Updating system packages..."
 sudo yum update -y
 sudo yum clean all
 
-# Install general dependencies (NEW - Removed python3 to avoid conflicts)
 echo ">>> Installing base dependencies..."
 sudo yum install -y git gcc 
 
 # ======================
-# 2. Install Python 3.8 (NEW - Moved before other installs)
+# 2. Install Python 3.8
 # ======================
 echo ">>> Installing Python 3.8..."
 sudo amazon-linux-extras enable python3.8 -y
-sudo yum install -y python3.8 python3.8-devel
+sudo yum install -y python38 python38-devel python38-pip
 sudo alternatives --set python3 /usr/bin/python3.8
-echo "Python version: $(python3 --version)"
+sudo alternatives --set pip /usr/bin/pip3.8
 
 # ======================
 # 3. Install PostgreSQL Client
 # ======================
-echo ">>> Configuring PostgreSQL repository..."
+echo ">>> Installing PostgreSQL client..."
 sudo tee /etc/yum.repos.d/pgdg.repo <<EOL
 [pgdg13]
 name=PostgreSQL 13 for RHEL/CentOS 7 - x86_64
@@ -40,8 +34,7 @@ enabled=1
 gpgcheck=0
 EOL
 
-echo ">>> Installing PostgreSQL client..."
-sudo yum install -y postgresql13-13.20
+sudo yum install -y postgresql13
 echo "PostgreSQL client version: $(psql --version)"
 
 # ======================
@@ -49,53 +42,67 @@ echo "PostgreSQL client version: $(psql --version)"
 # ======================
 echo ">>> Installing Tor..."
 sudo amazon-linux-extras enable epel -y
-sudo yum install -y epel-release tor
+sudo yum install -y tor
 sudo systemctl enable --now tor
 
 # ======================
-# 5. Deploy Application
+# 5. Clone Repository
 # ======================
 echo ">>> Cloning repository..."
-if [ ! -d "/home/ec2-user/crypto_live_pipeline" ]; then
-    git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline
-fi
-
-# ======================
-# 6. Python Environment (NEW - Simplified)
-# ======================
-echo ">>> Setting up Python environment..."
-python3 -m pip install --upgrade pip
-python3 -m venv /home/ec2-user/venv
-source /home/ec2-user/venv/bin/activate
-
-# NEW - Handle requirements.txt fallback
-if [ -f "/home/ec2-user/crypto_live_pipeline/requirements.txt" ]; then
-    echo ">>> Installing requirements..."
-    pip install -r /home/ec2-user/crypto_live_pipeline/requirements.txt || {
-        echo "WARNING: Failed to install some requirements, attempting fallback..."
-        pip install requests==2.28.0 psycopg2-binary python-dotenv
+MAX_RETRIES=3
+for i in $(seq 1 $MAX_RETRIES); do
+  if [ ! -d "/home/ec2-user/crypto_live_pipeline" ]; then
+    git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline && break || {
+      echo "Attempt $i/$MAX_RETRIES failed. Retrying..."
+      sleep 10
     }
-else
-    echo ">>> Installing default packages..."
-    pip install requests psycopg2-binary python-dotenv
-fi
-
-# ======================
-# 7. Database Setup (NEW - Improved waiting logic)
-# ======================
-echo ">>> Waiting for database..."
-for i in {1..30}; do
-    if PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d postgres -c "SELECT 1" &>/dev/null; then
-        break
-    fi
-    echo "Attempt $i/30: Waiting for database..."
-    sleep 10
+  fi
 done
 
-# NEW - Verify connection before creating tables
-PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d cryptodb -c "
+# ======================
+# 6. Python Environment
+# ======================
+echo ">>> Setting up Python environment..."
+cd /home/ec2-user/crypto_live_pipeline || {
+  echo "ERROR: Project directory missing!"
+  exit 1
+}
+
+python3 -m pip install --upgrade pip
+python3 -m venv venv
+source venv/bin/activate
+
+# Install requirements with fallback
+if [ -f "requirements.txt" ]; then
+  pip install -r requirements.txt || {
+    echo "WARNING: Failed to install some requirements, installing critical ones..."
+    pip install requests psycopg2-binary python-dotenv
+  }
+fi
+
+# ======================
+# 7. Database Setup
+# ======================
+echo ">>> Setting up database..."
+sudo mkdir -p /var/log/crypto_pipeline
+sudo chown ec2-user:ec2-user /var/log/crypto_pipeline
+
+# Wait for database to be available
+for i in {1..30}; do
+  if PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d postgres -c "SELECT 1" &>/dev/null; then
+    echo "Database connection successful!"
+    break
+  else
+    echo "Attempt $i/30: Waiting for database..."
+    sleep 10
+  fi
+done
+
+# Create tables
+echo ">>> Creating database tables..."
+PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d cryptodb <<EOL
 CREATE TABLE IF NOT EXISTS tokens (
-  address VARCHAR(64) PRIMARY KEY,
+address VARCHAR(64) PRIMARY KEY,
               pair_address VARCHAR(64),
               platform VARCHAR(50),
               quote_symbol VARCHAR(20),
@@ -158,10 +165,13 @@ CREATE TABLE IF NOT EXISTS tokens (
               creator VARCHAR(64),
               status VARCHAR(20) DEFAULT 'alive',
               creation_timestamp TIMESTAMP
-);"
+);
+CREATE INDEX IF NOT EXISTS idx_status ON tokens(status);
+CREATE INDEX IF NOT EXISTS idx_platform ON tokens(platform);
+EOL
 
 # ======================
-# 8. Environment Configuration (NEW - Moved to project dir)
+# 8. Environment Configuration
 # ======================
 echo ">>> Creating .env file..."
 cat > /home/ec2-user/crypto_live_pipeline/.env <<EOL
@@ -169,32 +179,40 @@ DB_HOST=${db_address}
 DB_USER=${db_username}
 DB_PASSWORD=${db_password}
 DB_NAME=cryptodb
+DB_PORT=5432
 TOR_PASSWORD=tor_poor
 EOL
 chmod 600 /home/ec2-user/crypto_live_pipeline/.env
 
 # ======================
-# 9. Start Application (NEW - Added process manager)
+# 9. Process Monitoring
 # ======================
-echo ">>> Starting application..."
-cd /home/ec2-user/crypto_live_pipeline
-nohup python3 -u new_tokens_pipeline.py >> /var/log/crypto_pipeline/pipeline.log 2>&1 &
-
-# NEW - Basic process monitoring
 echo ">>> Setting up process monitor..."
-cat > /home/ec2-user/monitor.sh <<'EOL'
+sudo tee /home/ec2-user/monitor.sh <<EOL
 #!/bin/bash
 while true; do
     if ! pgrep -f "python3.*new_tokens_pipeline.py" >/dev/null; then
-        echo "Process crashed! Restarting..."
+        echo "\$(date): Process not found! Restarting..." >> /var/log/crypto_pipeline/monitor.log
         cd /home/ec2-user/crypto_live_pipeline
+        source venv/bin/activate
         nohup python3 -u new_tokens_pipeline.py >> /var/log/crypto_pipeline/pipeline.log 2>&1 &
     fi
     sleep 60
 done
 EOL
 
-chmod +x /home/ec2-user/monitor.sh
+sudo chmod +x /home/ec2-user/monitor.sh
+sudo chown ec2-user:ec2-user /home/ec2-user/monitor.sh
+
+# ======================
+# 10. Start Application
+# ======================
+echo ">>> Starting application..."
+cd /home/ec2-user/crypto_live_pipeline
+source venv/bin/activate
+nohup python3 -u new_tokens_pipeline.py >> /var/log/crypto_pipeline/pipeline.log 2>&1 &
+
+# Start monitor in background
 nohup /home/ec2-user/monitor.sh >> /var/log/crypto_pipeline/monitor.log 2>&1 &
 
-echo ">>> Deployment complete!"
+echo ">>> Deployment completed successfully!"
