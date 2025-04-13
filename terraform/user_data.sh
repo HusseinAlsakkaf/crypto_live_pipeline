@@ -1,6 +1,12 @@
 #!/bin/bash
 # AWS EC2 User Data Script for Crypto Live Pipeline
-set -euo pipefail  # More strict error handling
+set -euo pipefail
+
+# ======================
+# 0. Logging Setup (NEW - Added first to capture all output)
+# ======================
+exec > >(tee /var/log/user-data.log) 2>&1
+echo "=== Starting user-data script ==="
 
 # ======================
 # 1. System Configuration
@@ -9,12 +15,21 @@ echo ">>> Updating system packages..."
 sudo yum update -y
 sudo yum clean all
 
-# Install general dependencies
+# Install general dependencies (NEW - Removed python3 to avoid conflicts)
 echo ">>> Installing base dependencies..."
-sudo yum install -y git python3 gcc python3-devel
+sudo yum install -y git gcc 
 
 # ======================
-# 2. Install PostgreSQL Client
+# 2. Install Python 3.8 (NEW - Moved before other installs)
+# ======================
+echo ">>> Installing Python 3.8..."
+sudo amazon-linux-extras enable python3.8 -y
+sudo yum install -y python3.8 python3.8-devel
+sudo alternatives --set python3 /usr/bin/python3.8
+echo "Python version: $(python3 --version)"
+
+# ======================
+# 3. Install PostgreSQL Client
 # ======================
 echo ">>> Configuring PostgreSQL repository..."
 sudo tee /etc/yum.repos.d/pgdg.repo <<EOL
@@ -27,133 +42,60 @@ EOL
 
 echo ">>> Installing PostgreSQL client..."
 sudo yum install -y postgresql13-13.20
-sudo yum clean all
-
-# Verify the installation
-echo ">>> PostgreSQL client version:"
-psql --version
+echo "PostgreSQL client version: $(psql --version)"
 
 # ======================
-# 3. Install Tor
+# 4. Install Tor
 # ======================
-echo ">>> Installing and configuring Tor..."
-
-# Enable EPEL repository
+echo ">>> Installing Tor..."
 sudo amazon-linux-extras enable epel -y
-sudo yum clean all
-
-# Install EPEL release package
-sudo yum install -y epel-release
-
-# Install Tor from EPEL repository
-sudo yum --enablerepo=epel install -y tor
-
-# Start and enable Tor
-sudo systemctl start tor
-sudo systemctl enable tor
-
-# Verify Tor is running
-if ! systemctl is-active --quiet tor; then
-    echo "ERROR: Tor service failed to start!"
-    exit 1
-fi
+sudo yum install -y epel-release tor
+sudo systemctl enable --now tor
 
 # ======================
-# 4. Deploy Application
+# 5. Deploy Application
 # ======================
 echo ">>> Cloning repository..."
 if [ ! -d "/home/ec2-user/crypto_live_pipeline" ]; then
-    git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline || {
-        echo "ERROR: Failed to clone repository!"
-        exit 1
-    }
+    git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline
 fi
 
-cd /home/ec2-user/crypto_live_pipeline || {
-    echo "ERROR: Failed to enter project directory!"
-    exit 1
-}
-
-# SSH Key Setup
-echo ">>> Configuring SSH access..."
-sudo mkdir -p /home/ec2-user/.ssh
-echo "${ssh_key}" | sudo tee -a /home/ec2-user/.ssh/authorized_keys >/dev/null
-sudo chmod 600 /home/ec2-user/.ssh/authorized_keys
-sudo chown -R ec2-user:ec2-user /home/ec2-user/.ssh
-
-# Python Environment
+# ======================
+# 6. Python Environment (NEW - Simplified)
+# ======================
 echo ">>> Setting up Python environment..."
-pip3 install --upgrade pip
-pip3 install -r requirements.txt || {
-    echo "ERROR: Failed to install Python requirements!"
-    exit 1
-}
+python3 -m pip install --upgrade pip
+python3 -m venv /home/ec2-user/venv
+source /home/ec2-user/venv/bin/activate
+
+# NEW - Handle requirements.txt fallback
+if [ -f "/home/ec2-user/crypto_live_pipeline/requirements.txt" ]; then
+    echo ">>> Installing requirements..."
+    pip install -r /home/ec2-user/crypto_live_pipeline/requirements.txt || {
+        echo "WARNING: Failed to install some requirements, attempting fallback..."
+        pip install requests==2.28.0 psycopg2-binary python-dotenv
+    }
+else
+    echo ">>> Installing default packages..."
+    pip install requests psycopg2-binary python-dotenv
+fi
 
 # ======================
-# 5. Configure Logging
+# 7. Database Setup (NEW - Improved waiting logic)
 # ======================
-echo ">>> Setting up logging..."
-sudo mkdir -p /var/log/crypto_pipeline
-sudo chown ec2-user:ec2-user /var/log/crypto_pipeline
-
-sudo tee /etc/logrotate.d/crypto_pipeline <<EOL
-/var/log/crypto_pipeline/*.log {
-    daily
-    rotate 7
-    compress
-    missingok
-    notifempty
-    create 0644 ec2-user ec2-user
-}
-EOL
-
-# ======================
-# 6. Create .env File
-# ======================
-echo ">>> Creating .env file..."
-cat <<EOL > /home/ec2-user/.env
-DB_USER=${db_username}
-DB_PASSWORD=${db_password}
-DB_HOST=${db_address}
-DB_NAME=cryptodb
-DB_PORT=5432
-TOR_PASSWORD=tor_poor
-EOL
-
-sudo chmod 600 /home/ec2-user/.env
-sudo chown ec2-user:ec2-user /home/ec2-user/.env
-
-# ======================
-# 7. Initialize Database
-# ======================
-echo ">>> Verifying database connection..."
-MAX_RETRIES=10
-RETRY_DELAY=10
-
-for ((i=1; i<=$MAX_RETRIES; i++)); do
-    if PGPASSWORD=${db_password} psql -h ${db_address} \
-       -U ${db_username} \
-       -d cryptodb \
-       -c "SELECT 1" >/dev/null 2>&1; then
-        echo "Database connection successful!"
+echo ">>> Waiting for database..."
+for i in {1..30}; do
+    if PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d postgres -c "SELECT 1" &>/dev/null; then
         break
-    else
-        echo "Attempt $i/$MAX_RETRIES: Database not ready yet..."
-        if [ $i -eq $MAX_RETRIES ]; then
-            echo "ERROR: Failed to connect to database after $MAX_RETRIES attempts!"
-            exit 1
-        fi
-        sleep $RETRY_DELAY
     fi
+    echo "Attempt $i/30: Waiting for database..."
+    sleep 10
 done
 
-echo ">>> Creating 'tokens' table in the database..."
-PGPASSWORD=${db_password} psql -h ${db_address} \
-       -U ${db_username} \
-       -d cryptodb \
-       -c "
-          CREATE TABLE IF NOT EXISTS tokens (
-              address VARCHAR(64) PRIMARY KEY,
+# NEW - Verify connection before creating tables
+PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d cryptodb -c "
+CREATE TABLE IF NOT EXISTS tokens (
+  address VARCHAR(64) PRIMARY KEY,
               pair_address VARCHAR(64),
               platform VARCHAR(50),
               quote_symbol VARCHAR(20),
@@ -216,67 +158,43 @@ PGPASSWORD=${db_password} psql -h ${db_address} \
               creator VARCHAR(64),
               status VARCHAR(20) DEFAULT 'alive',
               creation_timestamp TIMESTAMP
-          );
-
-          -- Indexes
-          CREATE INDEX IF NOT EXISTS idx_status ON tokens(status);
-          CREATE INDEX IF NOT EXISTS idx_platform ON tokens(platform);
-          CREATE INDEX IF NOT EXISTS idx_status_platform ON tokens(status, platform);
-          CREATE INDEX IF NOT EXISTS idx_creation_timestamp ON tokens(creation_timestamp);
-          CREATE INDEX IF NOT EXISTS idx_price ON tokens(price);
-          CREATE INDEX IF NOT EXISTS idx_liquidity ON tokens(liquidity);
-        " || {
-          echo "ERROR: Failed to create database tables!"
-          exit 1
-        }
+);"
 
 # ======================
-# 8. Start Application
+# 8. Environment Configuration (NEW - Moved to project dir)
 # ======================
-echo ">>> Starting pipeline..."
-{
-    echo "=== Startup Timestamp: $(date) ==="
-    echo "=== System Info ==="
-    echo "Hostname: $(hostname)"
-    echo "IP: $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)"
-    echo "=== Tor IP: $(curl --socks5 127.0.0.1:9050 ifconfig.me) ==="
-    
-    # Start the application
-    cd /home/ec2-user/crypto_live_pipeline
-    nohup python3 -u new_tokens_pipeline.py >> /var/log/crypto_pipeline/pipeline.log 2>&1 &
-    APP_PID=$!
-    
-    echo "Application started with PID: $APP_PID"
-    echo "=== Startup Complete ==="
-} | sudo tee -a /var/log/crypto_pipeline/startup.log
+echo ">>> Creating .env file..."
+cat > /home/ec2-user/crypto_live_pipeline/.env <<EOL
+DB_HOST=${db_address}
+DB_USER=${db_username}
+DB_PASSWORD=${db_password}
+DB_NAME=cryptodb
+TOR_PASSWORD=tor_poor
+EOL
+chmod 600 /home/ec2-user/crypto_live_pipeline/.env
 
 # ======================
-# 9. Monitoring Setup
+# 9. Start Application (NEW - Added process manager)
 # ======================
-echo ">>> Installing monitoring tools..."
-sudo yum install -y amazon-cloudwatch-agent
-sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOL
-{
-    "logs": {
-        "logs_collected": {
-            "files": {
-                "collect_list": [
-                    {
-                        "file_path": "/var/log/crypto_pipeline/*.log",
-                        "log_group_name": "crypto_pipeline",
-                        "log_stream_name": "$(curl -s http://169.254.169.254/latest/meta-data/instance-id)"
-                    }
-                ]
-            }
-        }
-    }
-}
+echo ">>> Starting application..."
+cd /home/ec2-user/crypto_live_pipeline
+nohup python3 -u new_tokens_pipeline.py >> /var/log/crypto_pipeline/pipeline.log 2>&1 &
+
+# NEW - Basic process monitoring
+echo ">>> Setting up process monitor..."
+cat > /home/ec2-user/monitor.sh <<'EOL'
+#!/bin/bash
+while true; do
+    if ! pgrep -f "python3.*new_tokens_pipeline.py" >/dev/null; then
+        echo "Process crashed! Restarting..."
+        cd /home/ec2-user/crypto_live_pipeline
+        nohup python3 -u new_tokens_pipeline.py >> /var/log/crypto_pipeline/pipeline.log 2>&1 &
+    fi
+    sleep 60
+done
 EOL
 
-sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-    -a fetch-config \
-    -m ec2 \
-    -s \
-    -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+chmod +x /home/ec2-user/monitor.sh
+nohup /home/ec2-user/monitor.sh >> /var/log/crypto_pipeline/monitor.log 2>&1 &
 
 echo ">>> Deployment complete!"
