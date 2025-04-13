@@ -202,3 +202,5 @@ terraform.rc
 
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
+
+.terraform/
