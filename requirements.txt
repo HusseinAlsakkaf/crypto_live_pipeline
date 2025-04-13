@@ -1,0 +1,21 @@
+# Core Dependencies
+certifi>=2025.1.31
+requests>=2.32.3
+urllib3>=2.3.0
+python-dotenv>=1.1.0
+
+# Scraping Tools
+fake-useragent>=2.1.0
+cloudscraper>=1.2.71  # Anti-bot bypass (verify ToS compliance)
+stem>=1.8.2           # Tor control
+
+# Database/Data
+psycopg2>=2.9.10
+pandas>=2.2.3
+SQLAlchemy>=2.0.40
+
+# Concurrency
+futures>=3.0.0; python_version < '3.2'  # Only for Python 2 compatibility
+
+# Logging
+logging-utils>=0.3  # If you've packaged your utils separately
