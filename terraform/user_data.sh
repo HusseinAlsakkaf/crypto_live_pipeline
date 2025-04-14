@@ -32,7 +32,6 @@ cd /home/ec2-user/crypto_live_pipeline || exit
 sudo pip3.8 install --upgrade pip
 sudo pip3.8 install -r requirements.txt
 
-
 # Configure fake-useragent with fallback
 echo "Setting up UserAgent fallback..."
 sudo -u ec2-user mkdir -p /home/ec2-user/crypto_live_pipeline/utils/
@@ -47,10 +46,31 @@ EOL'
 # Fix permissions for useragent.py
 sudo chmod +x /home/ec2-user/crypto_live_pipeline/utils/useragent.py
 sudo chown ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline/utils/useragent.py
+
 # 4. FIX PERMISSIONS
 sudo chown -R ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline
 
-# 5. DATABASE SETUP (with retries)
+# 5. INSTALL AND CONFIGURE TOR
+echo "Installing Tor..."
+sudo amazon-linux-extras install epel -y
+sudo yum install tor -y
+
+# Configure Tor
+echo "Configuring Tor..."
+sudo tee -a /etc/tor/torrc <<EOL
+SocksPort 9050
+EOL
+
+# Start and enable Tor service
+echo "Starting Tor service..."
+sudo systemctl start tor
+sudo systemctl enable tor
+
+# Test Tor connection
+echo "Testing Tor connection..."
+curl --proxy socks5://127.0.0.1:9050 http://checkip.amazonaws.com || echo "Tor connection failed"
+
+# 6. DATABASE SETUP (with retries)
 # Create SQL file with table schema
 cat > /tmp/create_table.sql <<EOL
 CREATE TABLE IF NOT EXISTS tokens (
@@ -115,7 +135,7 @@ for i in {1..5}; do
   PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d cryptodb -f /tmp/create_table.sql && break || sleep 15
 done
 
-# 6. START APPLICATION
+# 7. START APPLICATION
 cd /home/ec2-user/crypto_live_pipeline
 sudo -u ec2-user nohup python3.8 new_tokens_pipeline.py > pipeline.log 2>&1 &
 
