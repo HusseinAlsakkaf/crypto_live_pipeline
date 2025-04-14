@@ -53,22 +53,59 @@ sudo chown -R ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline
 # 5. INSTALL AND CONFIGURE TOR
 echo "Installing Tor..."
 sudo amazon-linux-extras install epel -y
-sudo yum install tor -y
+sudo yum install -y tor torsocks
 
-# Configure Tor
+# Configure Tor with proper settings
 echo "Configuring Tor..."
-sudo tee -a /etc/tor/torrc <<EOL
+sudo bash -c 'cat > /etc/tor/torrc <<EOL
 SocksPort 9050
-EOL
+ControlPort 9051
+CookieAuthentication 1
+RunAsDaemon 1
+Log notice file /var/log/tor/notices.log
+DataDirectory /var/lib/tor
+EOL'
+
+# Create tor log directory and fix permissions
+sudo mkdir -p /var/log/tor
+sudo chown -R tor:tor /var/log/tor
+sudo chmod 700 /var/log/tor
 
 # Start and enable Tor service
 echo "Starting Tor service..."
-sudo systemctl start tor
+sudo systemctl restart tor
 sudo systemctl enable tor
 
-# Test Tor connection
+# Wait for Tor to bootstrap
+echo "Waiting for Tor to bootstrap..."
+for i in {1..30}; do
+  if grep -q "Bootstrapped 100%" /var/log/tor/notices.log; then
+    echo "Tor successfully bootstrapped"
+    break
+  fi
+  echo "Waiting for Tor to bootstrap... ($i/30)"
+  sleep 2
+done
+
+# Test Tor connection with multiple methods
 echo "Testing Tor connection..."
-curl --proxy socks5://127.0.0.1:9050 http://checkip.amazonaws.com || echo "Tor connection failed"
+TOR_TEST1=$(curl --socks5 127.0.0.1:9050 -s https://check.torproject.org/api/ip | grep -q "IsTor.*true" && echo "OK" || echo "FAILED")
+TOR_TEST2=$(curl --socks5 127.0.0.1:9050 -s http://checkip.amazonaws.com >/dev/null && echo "OK" || echo "FAILED")
+
+echo "Tor Test 1 (check.torproject.org): $TOR_TEST1"
+echo "Tor Test 2 (checkip.amazonaws.com): $TOR_TEST2"
+
+if [ "$TOR_TEST1" != "OK" ] || [ "$TOR_TEST2" != "OK" ]; then
+  echo "Tor connection tests failed, checking logs..."
+  sudo journalctl -u tor --no-pager -n 50
+  exit 1
+fi
+
+# Additional verification
+echo "Verifying Tor ports..."
+sudo netstat -tulnp | grep -E '9050|9051'
+
+echo "Tor installation and configuration complete"
 
 # 6. DATABASE SETUP (with retries)
 # Create SQL file with table schema
