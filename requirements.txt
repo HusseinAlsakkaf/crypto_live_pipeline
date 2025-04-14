@@ -1,21 +1,18 @@
-# Core Dependencies (pinned to stable versions)
-certifi==2024.6.2               # Slightly older but more stable
-requests==2.31.0                # Downgraded for Py3.8 compatibility
-urllib3==2.2.1                  # Matches requests 2.31.0
-python-dotenv==1.0.0            # Stable version
+# Core Dependencies
+certifi==2024.6.2
+requests==2.28.1                # Better Py3.8 compatibility
+urllib3==1.26.16               # Works with requests 2.28.1
+python-dotenv==1.0.0
 
 # Scraping Tools
-fake-useragent==1.2.1           # Newer versions may need Py3.9+
-cloudscraper==1.2.71            # Keep as-is (verify ToS)
-stem==1.8.2                     # Keep as-is
+fake-useragent==0.1.11          # Older but stable version
+cloudscraper==1.2.71
+stem==1.8.2
 
 # Database/Data
-psycopg2-binary==2.9.9          # Binary package for easier installation
-pandas==2.0.3                   # Compatible with Py3.8
-SQLAlchemy==2.0.23              # Stable version
+psycopg2-binary==2.9.9
+pandas==1.5.3                  # Downgraded for Py3.8 compatibility
+SQLAlchemy==1.4.46             # Stable version for Py3.8
 
-# Concurrency (REMOVED futures - not needed for Py3+)
-# futures is only for Python 2.x
-
-# Logging
-# Replace with standard logging if possible
+# Utilities
+typing-extensions==4.5.0       # Required for TypedDict in Py3.8
