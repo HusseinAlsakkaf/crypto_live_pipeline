@@ -1,21 +1,21 @@
-# Core Dependencies
-certifi>=2025.1.31
-requests>=2.32.3
-urllib3>=2.3.0
-python-dotenv>=1.1.0
+# Core Dependencies (pinned to stable versions)
+certifi==2024.6.2               # Slightly older but more stable
+requests==2.31.0                # Downgraded for Py3.8 compatibility
+urllib3==2.2.1                  # Matches requests 2.31.0
+python-dotenv==1.0.0            # Stable version
 
 # Scraping Tools
-fake-useragent>=2.1.0
-cloudscraper>=1.2.71  # Anti-bot bypass (verify ToS compliance)
-stem>=1.8.2           # Tor control
+fake-useragent==1.2.1           # Newer versions may need Py3.9+
+cloudscraper==1.2.71            # Keep as-is (verify ToS)
+stem==1.8.2                     # Keep as-is
 
 # Database/Data
-psycopg2>=2.9.10
-pandas>=2.2.3
-SQLAlchemy>=2.0.40
+psycopg2-binary==2.9.9          # Binary package for easier installation
+pandas==2.0.3                   # Compatible with Py3.8
+SQLAlchemy==2.0.23              # Stable version
 
-# Concurrency
-futures>=3.0.0; python_version < '3.2'  # Only for Python 2 compatibility
+# Concurrency (REMOVED futures - not needed for Py3+)
+# futures is only for Python 2.x
 
 # Logging
-logging-utils>=0.3  # If you've packaged your utils separately
+# Replace with standard logging if possible
