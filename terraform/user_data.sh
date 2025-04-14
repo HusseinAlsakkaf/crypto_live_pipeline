@@ -32,30 +32,17 @@ cd /home/ec2-user/crypto_live_pipeline || exit
 sudo pip3.8 install --upgrade pip
 sudo pip3.8 install -r requirements.txt
 
-# Configure fake-useragent with fallback and verify it works
-echo "Setting up UserAgent with fallback..."
-sudo -u ec2-user python3.8 -c "
-import os
-from fake_useragent import UserAgent
 
-# Create cache directory
-cache_path = '/home/ec2-user/.fake-useragent'
-os.makedirs(cache_path, exist_ok=True)
+# Configure fake-useragent with fallback
+echo "Setting up UserAgent fallback..."
+sudo -u ec2-user mkdir -p /home/ec2-user/crypto_live_pipeline/utils/
+sudo -u ec2-user bash -c 'cat > /home/ec2-user/crypto_live_pipeline/utils/useragent.py << "EOL"
+"""Fallback user agents"""
+DEFAULT_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
-# Test with fallback
-try:
-    ua = UserAgent(
-        fallback='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        cache=True,
-        path=os.path.join(cache_path, 'cache.json')
-    )
-    print(f'UserAgent test successful: {ua.chrome}')
-except Exception as e:
-    print(f'UserAgent setup warning: {str(e)}')
-    # Create fallback file if completely fails
-    with open('/home/ec2-user/crypto_live_pipeline/utils/useragent.py', 'w') as f:
-        f.write('''DEFAULT_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"''')
-"
+def get_random():
+    return DEFAULT_AGENT
+EOL'
 
 # 4. FIX PERMISSIONS
 sudo chown -R ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline
