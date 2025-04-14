@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Initialize TorController
-TOR_PASSWORD = os.getenv("TOR_PASSWORD")  # Ensure this is set in your .env file
-tor_controller = TorController(password=TOR_PASSWORD)
+#TOR_PASSWORD = os.getenv("TOR_PASSWORD")  # Ensure this is set in your .env file
+tor_controller = TorController()
 
 def verify_tor_connection():
     """Verify Tor is working before starting pipeline."""
