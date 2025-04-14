@@ -1,6 +1,5 @@
 import random
 from datetime import datetime
-from fake_useragent import UserAgent
 import logging
 from utils.token_filter import token_filter
 from utils.scraper_utils import create_scraper
@@ -30,8 +29,30 @@ setup_logger(LOG_FILE)
 tor_controller = TorController(TOR_PASSWORD)
 
 # Initialize tools
-ua = UserAgent()
-
+try:
+    from fake_useragent import UserAgent
+    ua = UserAgent(
+        fallback='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        cache=True,
+        path='/home/ec2-user/.fake-useragent/cache.json'
+    )
+except Exception as e:
+    print(f"UserAgent init error: {e}")
+    from utils.useragent import DEFAULT_AGENTS, get_random_agent
+    class FallbackUserAgent:
+        @property
+        def random(self):
+            return get_random_agent()
+        
+        @property
+        def chrome(self):
+            return DEFAULT_AGENTS['chrome']
+            
+        @property
+        def firefox(self):
+            return DEFAULT_AGENTS['firefox']
+    
+    ua = FallbackUserAgent()
 # set up scraper
 scraper = create_scraper()
 
