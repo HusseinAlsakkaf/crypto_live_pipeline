@@ -15,7 +15,7 @@ from utils.flatten_json import flatten_json
 
 
 
-pd.set_option('future.no_silent_downcasting', True)
+
 
 def transform_new_tokens(json_data: dict) -> pd.DataFrame:
     """Transforms and cleans GMGN JSON data into a properly typed DataFrame."""
