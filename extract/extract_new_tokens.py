@@ -29,17 +29,17 @@ setup_logger(LOG_FILE)
 tor_controller = TorController(TOR_PASSWORD)
 
 # Initialize tools
-try:
-    from fake_useragent import UserAgent
-    ua = UserAgent()  # Remove cache/path parameters which aren't supported
-except Exception as e:
-    print(f"UserAgent init error: {e} - Using fallback")
-    from utils.useragent import get_random
-    ua = type('obj', (object,), {
-        'random': get_random,  # Directly use the function
-        'chrome': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'firefox': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0'
-    })
+# Directly use the fallback mechanism from utils.useragent
+from utils.useragent import get_random
+
+# Define a mock UserAgent object with the fallback mechanism
+ua = type('obj', (object,), {
+    'random': get_random,  # Use the fallback function for random user-agent
+    'chrome': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'firefox': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
+    'safari': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
+    'edge': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0'
+})
 # set up scraper
 scraper = create_scraper()
 

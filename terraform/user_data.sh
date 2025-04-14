@@ -44,6 +44,9 @@ def get_random():
     return DEFAULT_AGENT
 EOL'
 
+# Fix permissions for useragent.py
+sudo chmod +x /home/ec2-user/crypto_live_pipeline/utils/useragent.py
+sudo chown ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline/utils/useragent.py
 # 4. FIX PERMISSIONS
 sudo chown -R ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline
 
