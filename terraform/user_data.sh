@@ -1,8 +1,7 @@
 #!/bin/bash
-# AWS EC2 User Data Script - Optimized Version
 exec > >(tee /var/log/user-data.log) 2>&1
 
-# 1. INSTALL ESSENTIALS (with Python 3.8 and PostgreSQL)
+# 1. INSTALL ESSENTIALS (Python 3.8, PostgreSQL)
 sudo tee /etc/yum.repos.d/pgdg.repo <<EOL
 [pgdg13]
 name=PostgreSQL 13 for RHEL/CentOS 7 - x86_64
@@ -14,48 +13,41 @@ EOL
 sudo amazon-linux-extras install -y python3.8 postgresql13
 sudo alternatives --set python /usr/bin/python3.8
 
-sudo yum install -y \
-    git \
-    postgresql13 \
-    python3-pip \
-    python3-devel
+sudo yum install -y git postgresql13 python3-pip python3-devel
 
-# 2. CLONE REPO (with retries)
-for i in {1..3}; do
-  git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline && break || sleep 10
-done
+# 2. CLONE REPO
+git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline
 
 # 3. SETUP ENVIRONMENT
-cd /home/ec2-user/crypto_live_pipeline || exit
+cd /home/ec2-user/crypto_live_pipeline
 
-# Install requirements
-sudo pip3.8 install --upgrade pip
-sudo pip3.8 install -r requirements.txt
+# Create and activate virtual environment
+python3.8 -m venv .venv
+source .venv/bin/activate
 
-# Configure fake-useragent with fallback
+# Install dependencies within the virtual environment
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Configure fake-useragent (using correct permissions and avoiding executable)
 echo "Setting up UserAgent fallback..."
-sudo -u ec2-user mkdir -p /home/ec2-user/crypto_live_pipeline/utils/
-sudo -u ec2-user bash -c 'cat > /home/ec2-user/crypto_live_pipeline/utils/useragent.py << "EOL"
+mkdir -p /home/ec2-user/crypto_live_pipeline/utils/
+cat > /home/ec2-user/crypto_live_pipeline/utils/useragent.py << "EOL"
 """Fallback user agents"""
 DEFAULT_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
 def get_random():
-    return DEFAULT_AGENT
-EOL'
+  return DEFAULT_AGENT
+EOL
 
-# Fix permissions for useragent.py
-sudo chmod +x /home/ec2-user/crypto_live_pipeline/utils/useragent.py
-sudo chown ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline/utils/useragent.py
+chown ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline/utils/useragent.py
 
-# 4. FIX PERMISSIONS
-sudo chown -R ec2-user:ec2-user /home/ec2-user/crypto_live_pipeline
 
-# 5. INSTALL AND CONFIGURE TOR
+# 4. INSTALL AND CONFIGURE TOR
 echo "Installing Tor..."
 sudo amazon-linux-extras install epel -y
 sudo yum install -y tor torsocks
 
-# Configure Tor with proper settings
 echo "Configuring Tor..."
 sudo bash -c 'cat > /etc/tor/torrc <<EOL
 SocksPort 9050
@@ -76,10 +68,10 @@ echo "Starting Tor service..."
 sudo systemctl restart tor
 sudo systemctl enable tor
 
-# Wait for Tor to bootstrap
+# Wait for Tor to bootstrap (use journalctl)
 echo "Waiting for Tor to bootstrap..."
 for i in {1..30}; do
-  if grep -q "Bootstrapped 100%" /var/log/tor/notices.log; then
+  if journalctl -u tor --no-pager | grep -q "Bootstrapped 100%"; then
     echo "Tor successfully bootstrapped"
     break
   fi
@@ -87,28 +79,25 @@ for i in {1..30}; do
   sleep 2
 done
 
-# Test Tor connection with multiple methods
+# Test Tor connection
 echo "Testing Tor connection..."
 TOR_TEST1=$(curl --socks5 127.0.0.1:9050 -s https://check.torproject.org/api/ip | grep -q "IsTor.*true" && echo "OK" || echo "FAILED")
 TOR_TEST2=$(curl --socks5 127.0.0.1:9050 -s http://checkip.amazonaws.com >/dev/null && echo "OK" || echo "FAILED")
-
 echo "Tor Test 1 (check.torproject.org): $TOR_TEST1"
 echo "Tor Test 2 (checkip.amazonaws.com): $TOR_TEST2"
 
 if [ "$TOR_TEST1" != "OK" ] || [ "$TOR_TEST2" != "OK" ]; then
-  echo "Tor connection tests failed, checking logs..."
-  sudo journalctl -u tor --no-pager -n 50
-  exit 1
+   echo "Tor connection tests failed, checking logs..."
+   sudo journalctl -u tor --no-pager -n 50
+        exit 1
 fi
 
 # Additional verification
 echo "Verifying Tor ports..."
 sudo netstat -tulnp | grep -E '9050|9051'
-
 echo "Tor installation and configuration complete"
 
-# 6. DATABASE SETUP (with retries)
-# Create SQL file with table schema
+# 5. DATABASE SETUP
 cat > /tmp/create_table.sql <<EOL
 CREATE TABLE IF NOT EXISTS tokens (
   address VARCHAR(64) PRIMARY KEY,
@@ -167,13 +156,11 @@ CREATE INDEX IF NOT EXISTS idx_status ON tokens(status);
 CREATE INDEX IF NOT EXISTS idx_platform ON tokens(platform);
 EOL
 
-# Execute the SQL with retries
 for i in {1..5}; do
   PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d cryptodb -f /tmp/create_table.sql && break || sleep 15
 done
 
-# 7. START APPLICATION
-cd /home/ec2-user/crypto_live_pipeline
-sudo -u ec2-user nohup python3.8 new_tokens_pipeline.py > pipeline.log 2>&1 &
+# 6. START APPLICATION (inside virtual environment)
+nohup python new_tokens_pipeline.py > pipeline.log 2>&1 &
 
 echo "SUCCESS: Deployment completed. Check /var/log/user-data.log and ~/crypto_live_pipeline/pipeline.log for details."
