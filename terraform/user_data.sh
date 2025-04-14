@@ -1,81 +1,27 @@
 #!/bin/bash
-# AWS EC2 User Data Script for Crypto Live Pipeline
-set -euo pipefail
+# AWS EC2 User Data Script - Minimal Working Version
 exec > >(tee /var/log/user-data.log) 2>&1
 
-# ======================
-# 1. System Configuration
-# ======================
-echo ">>> Updating system packages..."
-sudo yum update -y --skip-broken
-sudo yum clean all
-
-# ======================
-# 2. Install Dependencies (SIMPLIFIED)
-# ======================
-echo ">>> Installing base dependencies..."
+# 1. INSTALL JUST THE ESSENTIALS
 sudo yum install -y \
     git \
     postgresql13 \
-    python3.8 \
-    python3.8-devel \
-    python3-pip \
-    amazon-linux-extras
+    python3 \
+    python3-pip
 
-# Set Python 3.8 as default
-sudo alternatives --set python3 /usr/bin/python3.8
-sudo alternatives --set pip /usr/bin/pip3.8
+# 2. CLONE REPO (with retries)
+for i in {1..3}; do
+  git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline && break || sleep 10
+done
 
-# ======================
-# 3. Install Tor
-# ======================
-echo ">>> Installing Tor..."
-sudo amazon-linux-extras enable epel -y
-sudo yum install -y tor
-sudo systemctl enable --now tor
+# 3. SETUP ENVIRONMENT
+cd /home/ec2-user/crypto_live_pipeline || exit
+python3 -m pip install -r requirements.txt
 
-# ======================
-# 4. Clone Repository (WITH ERROR HANDLING)
-# ======================
-echo ">>> Cloning repository..."
-if [ ! -d "/home/ec2-user/crypto_live_pipeline" ]; then
-  git clone "${github_repo}" /home/ec2-user/crypto_live_pipeline || {
-    echo "WARNING: Failed to clone repository, continuing anyway..."
-    mkdir -p /home/ec2-user/crypto_live_pipeline
-  }
-fi
-
-# ======================
-# 5. Python Environment (WITH FALLBACK)
-# ======================
-echo ">>> Setting up Python environment..."
-cd /home/ec2-user/crypto_live_pipeline
-
-python3 -m pip install --upgrade pip
-python3 -m venv venv
-source venv/bin/activate
-
-# Install either requirements.txt or critical packages
-if [ -f "requirements.txt" ]; then
-  pip install -r requirements.txt || {
-    echo "WARNING: Failed some requirements, installing essentials..."
-    pip install requests psycopg2-binary python-dotenv
-  }
-else
-  pip install requests psycopg2-binary python-dotenv
-fi
-
-# ======================
-# 6. Database Setup (WITH RETRIES)
-# ======================
-echo ">>> Setting up database..."
-for i in {1..10}; do
-  if PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d postgres -c "SELECT 1"; then
-    echo ">>> Creating tables..."
-    PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d cryptodb -c "
-      CREATE TABLE IF NOT EXISTS tokens (
-address VARCHAR(64) PRIMARY KEY,
-              pair_address VARCHAR(64),
+# 4. DATABASE SETUP
+PGPASSWORD=${db_password} psql -h ${db_address} -U ${db_username} -d cryptodb -c "
+  CREATE TABLE IF NOT EXISTS tokens (
+ pair_address VARCHAR(64),
               platform VARCHAR(50),
               quote_symbol VARCHAR(20),
               symbol VARCHAR(20),
@@ -137,35 +83,9 @@ address VARCHAR(64) PRIMARY KEY,
               creator VARCHAR(64),
               status VARCHAR(20) DEFAULT 'alive',
               creation_timestamp TIMESTAMP
-      );
-      CREATE INDEX IF NOT EXISTS idx_status ON tokens(status);
-    "
-    break
-  else
-    echo "Database not ready (attempt $i/10), waiting..."
-    sleep 10
-  fi
-done
+  );"
 
-# ======================
-# 7. Environment Config
-# ======================
-echo ">>> Creating .env file..."
-cat > /home/ec2-user/crypto_live_pipeline/.env <<EOL
-DB_HOST=${db_address}
-DB_USER=${db_username}
-DB_PASSWORD=${db_password}
-DB_NAME=cryptodb
-TOR_PASSWORD=tor_poor
-EOL
-chmod 600 /home/ec2-user/crypto_live_pipeline/.env
+# 5. START APPLICATION
+nohup python3 new_tokens_pipeline.py > pipeline.log 2>&1 &
 
-# ======================
-# 8. Start Application
-# ======================
-echo ">>> Starting application..."
-cd /home/ec2-user/crypto_live_pipeline
-source venv/bin/activate
-nohup python3 -u new_tokens_pipeline.py >> /var/log/crypto_pipeline.log 2>&1 &
-
-echo ">>> Deployment completed successfully!"
+echo "SUCCESS: Deployment completed"
